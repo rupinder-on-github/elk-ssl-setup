@@ -1,0 +1,229 @@
+ELASTICSEARCH CLUSTER - HTTPS and TLS Security
+
+Nodes IP Addresses:
+Node1 - 192.168.56.111
+Node2 - 192.168.56.112
+Node3 - 192.168.56.113
+
+curl -X GET "localhost:9200/_cluster/health?pretty"
+
+.::On Node 1::.
+sudo su
+cd /usr/share/elasticsearch
+bin/elasticsearch-certutil ca
+Enter
+Enter
+bin/elasticsearch-certutil cert --ca elastic-stack-ca.p12
+Enter
+Enter
+Enter
+
+mv elastic-certificates.p12 /etc/elasticsearch/
+
+cd /etc/elasticsearch/
+ls -ltr
+
+nano /etc/elasticsearch/elasticsearch.yml
+- Copy and paste following 5 lines in elasticsearch.yml file
+xpack.security.enabled: true
+xpack.security.transport.ssl.enabled: true
+xpack.security.transport.ssl.verification_mode: certificate
+xpack.security.transport.ssl.keystore.path: elastic-certificates.p12
+xpack.security.transport.ssl.truststore.path: elastic-certificates.p12
+
+chown root:elasticsearch /etc/elasticsearch/elastic-certificates.p12
+chmod 660 /etc/elasticsearch/elastic-certificates.p12
+
+Copy certificate to the other hosts
+scp /etc/elasticsearch/elastic-certificates.p12 vagrant@192.168.56.112:/home/vagrant/
+scp /etc/elasticsearch/elastic-certificates.p12 vagrant@192.168.56.113:/home/vagrant/
+
+systemctl restart elasticsearch 
+ 
+.::On Node 2::.
+sudo su
+cp /home/vagrant/elastic-certificates.p12 /etc/elasticsearch/
+
+nano /etc/elasticsearch/elasticsearch.yml
+- Copy and paste following 5 lines in elasticsearch.yml file 
+xpack.security.enabled: true
+xpack.security.transport.ssl.enabled: true
+xpack.security.transport.ssl.verification_mode: certificate
+xpack.security.transport.ssl.keystore.path: elastic-certificates.p12
+xpack.security.transport.ssl.truststore.path: elastic-certificates.p12
+
+chown root:elasticsearch /etc/elasticsearch/elastic-certificates.p12
+chmod 660 /etc/elasticsearch/elastic-certificates.p12
+
+systemctl restart elasticsearch 
+
+.::On Node 3::.
+sudo su
+cp /home/vagrant/elastic-certificates.p12 /etc/elasticsearch/
+
+
+nano /etc/elasticsearch/elasticsearch.yml
+- Copy and paste following 5 lines in elasticsearch.yml file 
+xpack.security.enabled: true
+xpack.security.transport.ssl.enabled: true
+xpack.security.transport.ssl.verification_mode: certificate
+xpack.security.transport.ssl.keystore.path: elastic-certificates.p12
+xpack.security.transport.ssl.truststore.path: elastic-certificates.p12
+
+chown root:elasticsearch /etc/elasticsearch/elastic-certificates.p12
+chmod 660 /etc/elasticsearch/elastic-certificates.p12
+
+systemctl restart elasticsearch 
+
+- Set passwords for default users
+cd /usr/share/elasticsearch
+bin/elasticsearch-setup-passwords interactive
+demo passwords:
+elastic:elastic
+apm_system:apmsystem
+kibana:kibana
+logstash_system:logstash
+beats_system:beatssystem
+remote_monitoring_user:remotemonitoring
+- you can generate random passwords automatic using following command
+bin/elasticsearch-setup-passwords auto
+- be sure that you will remember them
+
+Test cluster health:
+curl -u elastic:elastic  -X GET "localhost:9200/_cluster/health?pretty"
+
+Enter this ADDITIONAL 4 lines in elasticsearch.yml file on every node to eneble HTTPS:
+
+nano /etc/elasticsearch/elasticsearch.yml
+xpack.security.http.ssl.enabled: true
+xpack.security.http.ssl.keystore.path: elastic-certificates.p12
+xpack.security.http.ssl.truststore.path: elastic-certificates.p12
+xpack.security.http.ssl.client_authentication: optional
+
+systemctl restart elasticsearch
+
+
+Configure Kibana on Node 3
+
+cd /etc/elasticsearch/
+
+
+openssl pkcs12 -in elastic-certificates.p12 -out newfile.crt.pem -clcerts -nokeys
+Enter
+openssl pkcs12 -in elastic-certificates.p12 -out newfile.key.pem -nocerts -nodes
+Enter
+
+mv newfile.* /etc/kibana
+
+cd /etc/kibana 
+
+ls -ltr
+
+chown root:kibana /etc/kibana/newfile*
+chmod 660 /etc/kibana/newfile*
+nano /etc/kibana/kibana.yml
+
+Put this lines into the file
+
+elasticsearch.hosts: ["https://localhost:9200"]
+elasticsearch.username: "kibana"
+elasticsearch.password: "kibana"
+server.ssl.enabled: true
+server.ssl.certificate: /etc/kibana/newfile.crt.pem
+server.ssl.key: /etc/kibana/newfile.key.pem
+elasticsearch.ssl.verificationMode: none
+
+
+systemctl restart kibana
+
+https://192.168.56.113:5601/
+
+Logstash on Node 3
+
+cd /home/vagrant/
+
+curl https://artifacts.elastic.co/downloads/logstash/logstash-7.9.0.rpm -o logstash-7.9.0.rpm
+
+yum -y install java
+
+rpm -i logstash-7.9.0.rpm
+
+cp /etc/kibana/newfile.crt.pem /etc/logstash/newfile.crt.pem
+
+chown root:logstash /etc/logstash/newfile.crt.pem
+chmod 660 /etc/logstash/newfile.crt.pem
+
+nano /etc/logstash/pipelines.yml
+
+Replace default pipeline:
+- pipeline.id: test
+  path.config: "/etc/logstash/conf.d/testpipe.conf"
+
+Create conf file for the pipeline:
+nano /etc/logstash/conf.d/testpipe.conf
+
+Put these lines on it:
+==========================================================================
+input {
+    beats {
+        host => "192.168.56.113"
+        port => "5033"
+    }
+}
+
+#filter {
+#}
+
+output {
+  elasticsearch {
+    hosts => "https://localhost:9200"
+    index => "estack-test-pipeline-index"
+    user => "elastic"
+    password => "elastic"
+    cacert => "/etc/logstash/newfile.crt.pem"
+    ssl_certificate_verification => false
+  }
+}
+
+==========================================================================
+
+systemctl start logstash
+
+Check the log file to see that everything looks good maybe it will take a while 
+for logstash to create the file(depending on VM resources)
+
+tail -f /var/log/logstash/logstash-plain.log
+
+Filebeat Configuration(Windows)
+
+Download this example apachelogs.log file
+
+Link - https://mega.nz/file/jGJDEQjZ#sceYkyaCo7GXiw2ncK3xVLBdfCP1OSXzqKkFTWC8--A
+
+Download ready for using filebeat.zip file.
+
+Link - https://mega.nz/file/ODQnGajR#1jgjFVqn5Z_hPOTTO7NXKqQ8n8NNouLhbr2otTYfR8Q
+
+Create "logs" folder on your desktop and change the path in the filebeat.yml file with your username.
+ex: - C:\Users\YourUsername\Desktop\logs\*.log
+
+Open PowerShell like an administrator and execute following commands:
+
+cd 'C:\Program Files\filebeat\' - or your filebeat installation directory
+
+.\filebeat.exe -c filebeat.yml -e -d "*"
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
